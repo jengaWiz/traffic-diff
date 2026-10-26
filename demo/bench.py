@@ -25,19 +25,29 @@ def percentile(values: list[float], p: float) -> float:
 async def measure(base_url: str, paths: list[str], concurrency: int) -> list[float]:
     sem = asyncio.Semaphore(concurrency)
     latencies: list[float] = []
-    limits = httpx.Limits(max_connections=concurrency, max_keepalive_connections=concurrency)
-    async with httpx.AsyncClient(base_url=base_url, timeout=10, limits=limits) as client:
+    # One single-connection client per slot, like the replayer, so client-side
+    # pool overhead doesn't dominate the measurement.
+    limits = httpx.Limits(max_connections=1, max_keepalive_connections=1)
+    free = [
+        httpx.AsyncClient(base_url=base_url, timeout=10, limits=limits) for _ in range(concurrency)
+    ]
 
-        async def one(path: str) -> None:
-            async with sem:
+    async def one(path: str) -> None:
+        async with sem:
+            client = free.pop()
+            try:
                 start = time.perf_counter()
                 await client.get(path)
                 latencies.append((time.perf_counter() - start) * 1000)
+            finally:
+                free.append(client)
 
-        # Warm up connections and code paths before measuring.
-        await asyncio.gather(*(one(p) for p in paths[:100]))
-        latencies.clear()
-        await asyncio.gather(*(one(p) for p in paths))
+    # Warm up connections and code paths before measuring.
+    await asyncio.gather(*(one(p) for p in paths[:100]))
+    latencies.clear()
+    await asyncio.gather(*(one(p) for p in paths))
+    for client in free:
+        await client.aclose()
     return latencies
 
 
