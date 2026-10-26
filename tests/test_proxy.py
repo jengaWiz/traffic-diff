@@ -109,3 +109,37 @@ def test_client_pool_reuses_and_caps_clients():
         assert len(made) == 2
 
     asyncio.run(scenario())
+
+
+def test_recorder_flushes_everything_on_stop_even_mid_write():
+    import asyncio
+    import threading
+    import time as _time
+
+    from shadowdiff.proxy import Recorder
+
+    class SlowStore:
+        def __init__(self):
+            self.rows = []
+            self.lock = threading.Lock()
+
+        def add_exchanges(self, batch):
+            _time.sleep(0.01)  # a write still in flight when shutdown starts
+            with self.lock:
+                self.rows.extend(batch)
+
+    async def scenario():
+        store = SlowStore()
+        recorder = Recorder(store, batch_size=7)
+        writer = asyncio.create_task(recorder.run())
+        for i in range(50):
+            recorder.submit(i)
+            if i % 10 == 0:
+                await asyncio.sleep(0)  # let the writer start a batch
+        recorder.stop()
+        await writer
+        return store.rows, recorder.recorded
+
+    rows, recorded = asyncio.run(scenario())
+    assert rows == list(range(50))
+    assert recorded == 50
