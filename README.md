@@ -8,6 +8,9 @@ field, a changed type or a flipped status code slip through to production. shado
 requests your users actually sent and reports structural differences, ignoring noise like
 timestamps, generated IDs and reordered lists.
 
+> On PyPI the package is named **`traffic-diff`** (`shadowdiff` is too close to an existing
+> project there). The command and the Python package are still `shadowdiff`.
+
 > Status: MVP (v0.1.0). `GET` requests only. See [Limitations](#limitations).
 
 ## How it works
@@ -38,7 +41,7 @@ timestamps, generated IDs and reordered lists.
 
 ```bash
 git clone <this repo> && cd shadowdiff
-pip install -e ".[dev]"             # once published: pip install shadowdiff
+pip install -e ".[dev]"             # once published: pip install traffic-diff
 ```
 
 Run the demo shop: v1 on `:8001`, a buggy v2 on `:8002`, and the recorder on `:8080` in front of v1.

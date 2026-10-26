@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "shadowdiff"
+name = "traffic-diff"
 version = "0.1.0"
 description = "Record real API traffic, replay it against a new version, and flag only the response changes that matter."
 readme = "README.md"
