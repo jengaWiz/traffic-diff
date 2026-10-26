@@ -50,30 +50,39 @@ def should_record(method: str, status: int, req_body: bytes, resp_body: bytes) -
 class Recorder:
     """Buffers exchanges and writes them to the store in batches."""
 
+    _STOP = object()
+
     def __init__(self, store: Store, batch_size: int = 200):
         self.store = store
         self.batch_size = batch_size
-        self.queue: asyncio.Queue[Exchange] = asyncio.Queue()
+        self.queue: asyncio.Queue = asyncio.Queue()
         self.recorded = 0
 
     def submit(self, exchange: Exchange) -> None:
         self.queue.put_nowait(exchange)
 
-    async def run(self) -> None:
-        while True:
-            batch = [await self.queue.get()]
-            while len(batch) < self.batch_size and not self.queue.empty():
-                batch.append(self.queue.get_nowait())
-            await asyncio.to_thread(self.store.add_exchanges, batch)
-            self.recorded += len(batch)
+    def stop(self) -> None:
+        """Ask run() to flush everything submitted so far, then return."""
+        self.queue.put_nowait(self._STOP)
 
-    async def drain(self) -> None:
-        batch = []
-        while not self.queue.empty():
-            batch.append(self.queue.get_nowait())
-        if batch:
-            await asyncio.to_thread(self.store.add_exchanges, batch)
-            self.recorded += len(batch)
+    async def run(self) -> None:
+        # Stopping with a sentinel rather than cancelling means a batch is never
+        # abandoned mid-write and nothing submitted before stop() is lost.
+        stopping = False
+        while not stopping:
+            batch = []
+            item = await self.queue.get()
+            while True:
+                if item is self._STOP:
+                    stopping = True
+                    break
+                batch.append(item)
+                if len(batch) >= self.batch_size or self.queue.empty():
+                    break
+                item = self.queue.get_nowait()
+            if batch:
+                await asyncio.to_thread(self.store.add_exchanges, batch)
+                self.recorded += len(batch)
 
 
 class ClientPool:
@@ -133,10 +142,8 @@ def create_app(
         try:
             yield
         finally:
-            writer.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await writer
-            await recorder.drain()
+            recorder.stop()
+            await writer
             await pool.aclose()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
