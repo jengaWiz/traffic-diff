@@ -1,6 +1,7 @@
 """Async replay of recorded exchanges against a target, plus run orchestration."""
 
 import asyncio
+import contextlib
 import time
 from dataclasses import dataclass
 
@@ -33,15 +34,25 @@ async def replay_exchanges(
 ) -> list[Replayed]:
     """Send each recorded request to TARGET; failures are captured, never raised."""
     sem = asyncio.Semaphore(concurrency)
-    limits = httpx.Limits(max_connections=concurrency, max_keepalive_connections=concurrency)
-
-    async with httpx.AsyncClient(
-        base_url=target.rstrip("/"), timeout=timeout, limits=limits, transport=transport
-    ) as client:
+    # One single-connection client per concurrency slot. A single httpx client
+    # with a large pool spends CPU per request proportional to the pool size,
+    # which capped replay at ~250 req/s at concurrency 50; small pools scale.
+    limits = httpx.Limits(max_connections=1, max_keepalive_connections=1)
+    async with contextlib.AsyncExitStack() as stack:
+        free = [
+            await stack.enter_async_context(
+                httpx.AsyncClient(
+                    base_url=target.rstrip("/"), timeout=timeout, limits=limits, transport=transport
+                )
+            )
+            for _ in range(min(concurrency, len(exchanges)))
+        ]
 
         async def one(ex: Exchange) -> Replayed:
             url = ex.path + (f"?{ex.query}" if ex.query else "")
             async with sem:
+                # The semaphore guarantees a free client is available.
+                client = free.pop()
                 start = time.perf_counter()
                 try:
                     resp = await client.request(
@@ -54,6 +65,8 @@ async def replay_exchanges(
                     return Replayed(ex.id, None, {}, None, None, f"timeout after {timeout:g}s")
                 except httpx.HTTPError as exc:
                     return Replayed(ex.id, None, {}, None, None, f"{type(exc).__name__}: {exc}")
+                finally:
+                    free.append(client)
                 latency_ms = (time.perf_counter() - start) * 1000
             return Replayed(
                 ex.id,
