@@ -66,11 +66,11 @@ def create_app(version: str = "v1") -> FastAPI:
         return _noisy({"error": f"{kind} {item_id} not found"}, version, status_code=404)
 
     @app.get("/health")
-    def health():
+    async def health():
         return _noisy({"ok": True}, version)
 
     @app.get("/products")
-    def list_products(category: str | None = None, limit: int = 20, offset: int = 0):
+    async def list_products(category: str | None = None, limit: int = 20, offset: int = 0):
         items = [p for p in PRODUCTS.values() if category is None or p["category"] == category]
         page = items[offset : offset + limit]
         # Simulate a backend that doesn't guarantee ordering (e.g. a hash-partitioned store).
@@ -80,7 +80,7 @@ def create_app(version: str = "v1") -> FastAPI:
         )
 
     @app.get("/products/{product_id}")
-    def get_product(product_id: int):
+    async def get_product(product_id: int):
         product = PRODUCTS.get(product_id)
         if product is None:
             return not_found("product", product_id)
@@ -93,7 +93,7 @@ def create_app(version: str = "v1") -> FastAPI:
         return _noisy(product, version)
 
     @app.get("/orders/{order_id}")
-    def get_order(order_id: int):
+    async def get_order(order_id: int):
         order = ORDERS.get(order_id)
         if order is None:
             return not_found("order", order_id)
