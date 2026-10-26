@@ -41,7 +41,7 @@ shadowdiff = "shadowdiff.cli:app"
 packages = ["shadowdiff"]
 
 [tool.hatch.build.targets.sdist]
-include = ["shadowdiff", "tests", "README.md", "LICENSE", "shadowdiff.yaml"]
+include = ["shadowdiff", "demo", "tests", "README.md", "LICENSE", "shadowdiff.yaml"]
 
 [tool.ruff]
 line-length = 100
