@@ -17,7 +17,6 @@ from datetime import UTC, datetime
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
-VERSION = os.environ.get("VERSION", "v1")
 CATEGORIES = ["books", "games", "kitchen", "garden", "toys"]
 
 _rng = random.Random(42)
@@ -50,53 +49,57 @@ for order in ORDERS.values():
         sum(PRODUCTS[line["product_id"]]["price"] * line["qty"] for line in order["lines"]), 2
     )
 
-app = FastAPI(title=f"shadowdiff demo shop ({VERSION})")
 
-
-def _noisy(body: dict, status_code: int = 200) -> JSONResponse:
+def _noisy(body: dict, version: str, status_code: int = 200) -> JSONResponse:
     body = {
         **body,
         "request_id": str(uuid.uuid4()),
         "served_at": datetime.now(UTC).isoformat(),
     }
-    return JSONResponse(body, status_code=status_code, headers={"x-demo-version": VERSION})
+    return JSONResponse(body, status_code=status_code, headers={"x-demo-version": version})
 
 
-def _not_found(kind: str, item_id: int) -> JSONResponse:
-    return _noisy({"error": f"{kind} {item_id} not found"}, status_code=404)
+def create_app(version: str = "v1") -> FastAPI:
+    app = FastAPI(title=f"shadowdiff demo shop ({version})")
+
+    def not_found(kind: str, item_id: int) -> JSONResponse:
+        return _noisy({"error": f"{kind} {item_id} not found"}, version, status_code=404)
+
+    @app.get("/health")
+    def health():
+        return _noisy({"ok": True}, version)
+
+    @app.get("/products")
+    def list_products(category: str | None = None, limit: int = 20, offset: int = 0):
+        items = [p for p in PRODUCTS.values() if category is None or p["category"] == category]
+        page = items[offset : offset + limit]
+        # Simulate a backend that doesn't guarantee ordering (e.g. a hash-partitioned store).
+        page = random.sample(page, k=len(page))
+        return _noisy(
+            {"items": page, "total": len(items), "limit": limit, "offset": offset}, version
+        )
+
+    @app.get("/products/{product_id}")
+    def get_product(product_id: int):
+        product = PRODUCTS.get(product_id)
+        if product is None:
+            return not_found("product", product_id)
+        product = dict(product)
+        if version == "v2":
+            # Planted bug 1: price serialized as a string.
+            product["price"] = f"{product['price']:.2f}"
+            # Planted bug 2: in_stock renamed to available.
+            product["available"] = product.pop("in_stock")
+        return _noisy(product, version)
+
+    @app.get("/orders/{order_id}")
+    def get_order(order_id: int):
+        order = ORDERS.get(order_id)
+        if order is None:
+            return not_found("order", order_id)
+        return _noisy(order, version)
+
+    return app
 
 
-@app.get("/health")
-def health():
-    return _noisy({"ok": True})
-
-
-@app.get("/products")
-def list_products(category: str | None = None, limit: int = 20, offset: int = 0):
-    items = [p for p in PRODUCTS.values() if category is None or p["category"] == category]
-    page = items[offset : offset + limit]
-    # Simulate a backend that doesn't guarantee ordering (e.g. a hash-partitioned store).
-    page = random.sample(page, k=len(page))
-    return _noisy({"items": page, "total": len(items), "limit": limit, "offset": offset})
-
-
-@app.get("/products/{product_id}")
-def get_product(product_id: int):
-    product = PRODUCTS.get(product_id)
-    if product is None:
-        return _not_found("product", product_id)
-    product = dict(product)
-    if VERSION == "v2":
-        # Planted bug 1: price serialized as a string.
-        product["price"] = f"{product['price']:.2f}"
-        # Planted bug 2: in_stock renamed to available.
-        product["available"] = product.pop("in_stock")
-    return _noisy(product)
-
-
-@app.get("/orders/{order_id}")
-def get_order(order_id: int):
-    order = ORDERS.get(order_id)
-    if order is None:
-        return _not_found("order", order_id)
-    return _noisy(order)
+app = create_app(os.environ.get("VERSION", "v1"))
