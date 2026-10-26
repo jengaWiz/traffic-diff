@@ -1,0 +1,13 @@
+# shadowdiff ignore rules. Differences matching these are treated as noise.
+
+# Field-name globs. A pattern starting with "$" matches the full JSON path instead.
+ignore_fields: ["*_at", "id", "request_id"]
+
+# Value patterns: a change from one UUID to another (or one ISO-8601 timestamp
+# to another) is ignored wherever it appears.
+ignore_values: [uuid, iso_timestamp]
+
+# Lists whose order doesn't matter: JSON path -> key to match items by
+# (use null to compare items regardless of order without a key).
+unordered_lists:
+  "$.items": "id"
