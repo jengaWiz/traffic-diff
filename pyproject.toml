@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "shadowdiff"
+name = "traffic-diff"
 version = "0.1.0"
 description = "Record real API traffic, replay it against a new version, and flag only the response changes that matter."
 readme = "README.md"
@@ -31,6 +31,11 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/jengaWiz/shadowdiff"
+Repository = "https://github.com/jengaWiz/shadowdiff"
+Issues = "https://github.com/jengaWiz/shadowdiff/issues"
+
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.5", "build>=1.2", "twine>=5"]
 
@@ -39,8 +44,12 @@ shadowdiff = "shadowdiff.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["shadowdiff"]
+# Metadata 2.4 is the version PyPI has long accepted for License-Expression;
+# newer hatchling defaults to 2.5.
+core-metadata-version = "2.4"
 
 [tool.hatch.build.targets.sdist]
+core-metadata-version = "2.4"
 include = ["shadowdiff", "demo", "tests", "README.md", "LICENSE", "shadowdiff.yaml"]
 
 [tool.ruff]
