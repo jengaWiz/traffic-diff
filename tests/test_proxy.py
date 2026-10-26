@@ -79,3 +79,33 @@ def test_upstream_down_returns_502(tmp_path):
     with TestClient(app) as client:
         assert client.get("/anything").status_code == 502
     assert store.exchanges("s1") == []
+
+
+def test_client_pool_reuses_and_caps_clients():
+    import asyncio
+
+    from shadowdiff.proxy import ClientPool
+
+    async def scenario():
+        made = []
+        pool = ClientPool(lambda: made.append(object()) or made[-1], max_size=2)
+        async with pool.client() as a:
+            async with pool.client() as b:
+                assert a is not b
+        async with pool.client() as c:
+            assert c is a or c is b
+        assert len(made) == 2
+
+        # At the cap, a third concurrent user waits for a client to be returned.
+        order = []
+
+        async def use(name, hold):
+            async with pool.client():
+                order.append(name)
+                await asyncio.sleep(hold)
+
+        await asyncio.gather(use("x", 0.02), use("y", 0.02), use("z", 0))
+        assert sorted(order) == ["x", "y", "z"] and order[-1] == "z"
+        assert len(made) == 2
+
+    asyncio.run(scenario())

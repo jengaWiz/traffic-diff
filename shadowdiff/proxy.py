@@ -76,6 +76,40 @@ class Recorder:
             self.recorded += len(batch)
 
 
+class ClientPool:
+    """A growable LIFO pool of single-connection httpx clients.
+
+    One shared client with a large connection pool spends CPU per request
+    proportional to the pool size, which added tens of milliseconds of p95
+    latency under concurrent load. Single-connection clients avoid that, and
+    LIFO reuse keeps the warmest connections busy.
+    """
+
+    def __init__(self, factory, max_size: int = 200):
+        self.factory = factory
+        self.max_size = max_size
+        self.idle: asyncio.LifoQueue[httpx.AsyncClient] = asyncio.LifoQueue()
+        self.clients: list[httpx.AsyncClient] = []
+
+    @contextlib.asynccontextmanager
+    async def client(self):
+        if not self.idle.empty():
+            client = self.idle.get_nowait()
+        elif len(self.clients) < self.max_size:
+            client = self.factory()
+            self.clients.append(client)
+        else:
+            client = await self.idle.get()
+        try:
+            yield client
+        finally:
+            self.idle.put_nowait(client)
+
+    async def aclose(self) -> None:
+        for client in self.clients:
+            await client.aclose()
+
+
 def create_app(
     target: str,
     store: Store,
@@ -87,20 +121,23 @@ def create_app(
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
         recorder = Recorder(store)
-        limits = httpx.Limits(max_connections=200, max_keepalive_connections=100)
-        async with httpx.AsyncClient(
-            base_url=target, limits=limits, timeout=30, transport=transport
-        ) as client:
-            app.state.client = client
-            app.state.recorder = recorder
-            writer = asyncio.create_task(recorder.run())
-            try:
-                yield
-            finally:
-                writer.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await writer
-                await recorder.drain()
+        limits = httpx.Limits(max_connections=1, max_keepalive_connections=1)
+        pool = ClientPool(
+            lambda: httpx.AsyncClient(
+                base_url=target, limits=limits, timeout=30, transport=transport
+            )
+        )
+        app.state.pool = pool
+        app.state.recorder = recorder
+        writer = asyncio.create_task(recorder.run())
+        try:
+            yield
+        finally:
+            writer.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await writer
+            await recorder.drain()
+            await pool.aclose()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -109,7 +146,7 @@ def create_app(
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
     )
     async def forward(request: Request, path: str) -> Response:
-        client: httpx.AsyncClient = request.app.state.client
+        pool: ClientPool = request.app.state.pool
         req_body = await request.body()
         req_headers = strip_headers(request.headers)
         query = request.url.query
@@ -117,9 +154,10 @@ def create_app(
 
         start = time.perf_counter()
         try:
-            upstream = await client.request(
-                request.method, url, headers=req_headers, content=req_body
-            )
+            async with pool.client() as client:
+                upstream = await client.request(
+                    request.method, url, headers=req_headers, content=req_body
+                )
         except httpx.HTTPError as exc:
             return Response(f"shadowdiff proxy: upstream error: {exc!r}", status_code=502)
         latency_ms = (time.perf_counter() - start) * 1000
